@@ -1,1 +1,1 @@
-### For full partitions only (.img), in development
+### For full partitions (.img) only. In development.
