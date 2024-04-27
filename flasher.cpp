@@ -82,14 +82,15 @@ void ui_print(const char *string, ...) {
   va_list args;
   va_start(args, string);
 
-  unique_lock<mutex> lock(print_mtx);
-  fprintf(outfd, "ui_print ");
-  vfprintf(outfd, string, args);
-  fprintf(outfd, "\n");
-  fprintf(outfd, "ui_print\n");
+  {
+    lock_guard<mutex> lock(print_mtx);
+    fprintf(outfd, "ui_print ");
+    vfprintf(outfd, string, args);
+    fprintf(outfd, "\n");
+    fprintf(outfd, "ui_print\n");
 
-  fflush(outfd);
-  lock.unlock();
+    fflush(outfd);
+  }
 
   va_end(args);
 }
@@ -218,10 +219,11 @@ public:
                                          lzmaBufferSize)) > 0 &&
                !emergency_end.load(memory_order_relaxed)) {
           
-          // Lock -> push -> unlock -> notify
-          unique_lock<mutex> lock(mtx_first);
-          buffers_first.push(make_pair(read, compressedBuffer));
-          lock.unlock();
+          // Guard push -> notify
+          {
+            lock_guard<mutex> lock(mtx_first);
+            buffers_first.push(make_pair(read, compressedBuffer));
+          }
           do_lzma.notify_one();
 
           // Increment used ram and check if it exceeds limit.
@@ -305,10 +307,11 @@ public:
         if (strm.avail_out == 0 || ret == LZMA_STREAM_END) {
           size_t write_size = decompressedBuffer.size() - strm.avail_out;
 
-          // Lock -> push -> unlock -> notify
-          unique_lock<mutex> lock(mtx_second);
-          buffers_second.push(make_pair(write_size, decompressedBuffer));
-          lock.unlock();
+          // Guard push -> notify
+          {
+            lock_guard<mutex> lock(mtx_second);
+            buffers_second.push(make_pair(write_size, decompressedBuffer));
+          }
           do_write.notify_one();
 
           // Increment ram usage
@@ -371,6 +374,7 @@ public:
           }
         }
       }
+
       unique_lock<mutex> lock(mtx_second);
       auto front = buffers_second.front();
       buffers_second.pop();
@@ -438,9 +442,10 @@ public:
         while ((read = archive_read_data(a, compressedBuffer.data(),
                                          ZSTD_DStreamInSize())) > 0 &&
                !emergency_end.load(memory_order_relaxed)) {
-          unique_lock<mutex> lock(mtx);
-          buffers.push(make_pair(read, compressedBuffer));
-          lock.unlock();
+          {
+            lock_guard<mutex> lock(mtx);
+            buffers.push(make_pair(read, compressedBuffer));
+          }
           do_zstd.notify_one();
         }
 
@@ -566,9 +571,10 @@ public:
         while ((read = archive_read_data(a, decompressedBuffer.data(),
                                          bufferSize)) > 0 &&
                !emergency_end.load(memory_order_relaxed)) {
-          unique_lock<mutex> lock(mtx);
-          buffers.push(make_pair(read, decompressedBuffer));
-          lock.unlock();
+          {
+            lock_guard<mutex> lock(mtx);
+            buffers.push(make_pair(read, decompressedBuffer));
+          }
           do_write.notify_one();
         }
 
