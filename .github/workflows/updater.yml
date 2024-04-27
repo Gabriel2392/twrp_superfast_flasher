@@ -1,0 +1,25 @@
+name: Build updater
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Install tools
+      run: |
+        sudo apt-get update -y &>/dev/null || sudo apt-get update -y &>/dev/null || true
+        sudo apt-get upgrade -y &>/dev/null || sudo apt-get upgrade -y &>/dev/null || true
+        sudo apt-get install wget unzip aria2 curl jq tar gzip build-essential autopoint flex bison cmake -y || sudo apt-get install wget unzip aria2 curl jq tar gzip build-essential autopoint flex bison cmake -y
+    - name: Build
+      run: |
+        bash build.sh        
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: updater
+        path: update-binary
