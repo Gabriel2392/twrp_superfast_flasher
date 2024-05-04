@@ -1,6 +1,7 @@
 #include <archive.h>
 #include <archive_entry.h>
 #include <fcntl.h>
+#include <lz4frame.h>
 #include <lzma.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -13,18 +14,18 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <initializer_list>
+#include <mntent.h>
 #include <mutex>
 #include <queue>
 #include <sstream>
 #include <string>
+#include <sys/mount.h>
 #include <sys/system_properties.h>
 #include <thread>
 #include <utility>
 #include <vector>
-#include <functional>
-#include <mntent.h>
-#include <sys/mount.h>
 
 using namespace std;
 using mapped = vector<vector<string>>;
@@ -37,45 +38,48 @@ mutex print_mtx;
 
 class ThreadManager {
 public:
-    ThreadManager() : max_threads((thread::hardware_concurrency() > 0 && thread::hardware_concurrency() % 2 == 0) ? thread::hardware_concurrency() / 2 : 1) {}
+  ThreadManager()
+      : max_threads((thread::hardware_concurrency() > 0 &&
+                     thread::hardware_concurrency() % 2 == 0)
+                        ? thread::hardware_concurrency() / 2
+                        : 1) {}
 
-    ~ThreadManager() {
-        for (auto& thread : threads) {
-            if (thread.joinable()) {
-                thread.join();
-            }
-        }
+  ~ThreadManager() {
+    for (auto &thread : threads) {
+      if (thread.joinable()) {
+        thread.join();
+      }
     }
+  }
 
-    template <typename... Args>
-    void addThread(Args&&... args) {
-        function<void()> threadFunc = bind(std::forward<Args>(args)...);
+  template <typename... Args> void addThread(Args &&...args) {
+    function<void()> threadFunc = bind(std::forward<Args>(args)...);
+    unique_lock<mutex> lock(mutex_);
+    threads.push_back(thread([this, threadFunc]() {
+      threadFunc();
+      {
         unique_lock<mutex> lock(mutex_);
-        threads.push_back(thread([this, threadFunc]() {
-            threadFunc();
-            {
-                unique_lock<mutex> lock(mutex_);
-                running_threads--;
-                cv.notify_one();
-            }
-        }));
-        running_threads++;
-        if (running_threads >= max_threads) {
-            cv.wait(lock, [this] { return running_threads < max_threads; });
-        }
+        running_threads--;
+        cv.notify_one();
+      }
+    }));
+    running_threads++;
+    if (running_threads >= max_threads) {
+      cv.wait(lock, [this] { return running_threads < max_threads; });
     }
+  }
 
-    void waitAll() {
-        unique_lock<mutex> lock(mutex_);
-        cv.wait(lock, [this] { return running_threads == 0; });
-    }
+  void waitAll() {
+    unique_lock<mutex> lock(mutex_);
+    cv.wait(lock, [this] { return running_threads == 0; });
+  }
 
 private:
-    vector<thread> threads;
-    mutex mutex_;
-    condition_variable cv;
-    int max_threads;
-    int running_threads = 0;
+  vector<thread> threads;
+  mutex mutex_;
+  condition_variable cv;
+  int max_threads;
+  int running_threads = 0;
 };
 
 void ui_print(const char *string, ...) {
@@ -154,19 +158,20 @@ string GetProperty(const string &prop) {
 }
 
 void umount_device(string &device) {
-    FILE* mountFile = setmntent("/proc/mounts", "r");
-    if (mountFile == nullptr) {
-        return;
-    }
+  FILE *mountFile = setmntent("/proc/mounts", "r");
+  if (mountFile == nullptr) {
+    return;
+  }
 
-    struct mntent* entry;
-    while ((entry = getmntent(mountFile)) != nullptr) {
-        if (strcmp(entry->mnt_fsname, device.c_str()) == 0 || strcmp(entry->mnt_dir, device.c_str()) == 0) {
-            umount(entry->mnt_dir);        
-        }
+  struct mntent *entry;
+  while ((entry = getmntent(mountFile)) != nullptr) {
+    if (strcmp(entry->mnt_fsname, device.c_str()) == 0 ||
+        strcmp(entry->mnt_dir, device.c_str()) == 0) {
+      umount(entry->mnt_dir);
     }
+  }
 
-    endmntent(mountFile);
+  endmntent(mountFile);
 }
 
 class LzmaHyperFlash {
@@ -218,7 +223,7 @@ public:
         while ((read = archive_read_data(a, compressedBuffer.data(),
                                          lzmaBufferSize)) > 0 &&
                !emergency_end.load(memory_order_relaxed)) {
-          
+
           // Guard push -> notify
           {
             lock_guard<mutex> lock(mtx_first);
@@ -288,8 +293,10 @@ public:
         } else {
           unique_lock<mutex> lzma_lock(mtx_lzma);
           do_lzma.wait(lzma_lock);
-          if (emergency_end.load(memory_order_relaxed)) { // Maybe it was notified after a failure.
-            break; // Prevent from being stuck
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
+            break;                         // Prevent from being stuck
           }
         }
       }
@@ -323,8 +330,11 @@ public:
 
         if (ret != LZMA_OK) {
           if (ret == LZMA_STREAM_END) {
-            if (!unzip_finished.load(memory_order_relaxed)) { // LZMA Finished but libarchive still unpacking, warn about it.
-              ui_print("LZMA: Unexpected stream end. Check %s integrity", flash_data.first.c_str());
+            if (!unzip_finished.load(
+                    memory_order_relaxed)) { // LZMA Finished but libarchive
+                                             // still unpacking, warn about it.
+              ui_print("LZMA: Unexpected stream end. Check %s integrity",
+                       flash_data.first.c_str());
             }
             goto end;
           }
@@ -369,8 +379,10 @@ public:
         } else {
           unique_lock<mutex> write_lock(mtx_write);
           do_write.wait(write_lock);
-          if (emergency_end.load(memory_order_relaxed)) { // Maybe it was notified after a failure.
-            break; // Prevent from being stuck
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
+            break;                         // Prevent from being stuck
           }
         }
       }
@@ -488,7 +500,9 @@ public:
         } else {
           unique_lock<mutex> zstd_lock(mtx_zstd);
           do_zstd.wait(zstd_lock);
-          if (emergency_end.load(memory_order_relaxed)) { // Maybe it was notified after a failure.
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
             break;
           }
         }
@@ -526,6 +540,155 @@ public:
   end:
     unzstd_finished.store(true, memory_order_relaxed);
     ZSTD_freeDCtx(dctx);
+    if (notify_flash) {
+      ui_print("%s - OK", flash_data.first.c_str());
+    }
+  }
+};
+
+class Lz4HyperFlash {
+private:
+  const int lz4BufferSize = 256 * 1024;
+  queue<pair<size_t, vector<unsigned char>>> buffers;
+  mutex mtx;
+  atomic<bool> unzip_finished{false};
+  atomic<bool> unlz4_finished{false};
+  atomic<bool> emergency_end{false};
+  condition_variable do_lz4;
+  mutex mtx_lz4;
+  pair<string, string> flash_data;
+
+public:
+  Lz4HyperFlash(pair<string, string> d) : flash_data(d) {}
+
+  void unzip() {
+    struct archive *a = archive_read_new();
+    archive_read_support_format_zip(a);
+
+    if (archive_read_open_filename(a, zip_filename.c_str(), 10240)) {
+      ui_print("Failed to open archive: %zu", archive_error_string(a));
+      emergency_end.store(true, memory_order_relaxed);
+      do_lz4.notify_one();
+      archive_read_free(a);
+      return;
+    }
+
+    vector<unsigned char> compressedBuffer(lz4BufferSize);
+
+    size_t read;
+    bool found = false;
+    struct archive_entry *entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+      const char *filename = archive_entry_pathname(entry);
+      if (strcmp(filename, flash_data.first.c_str()) == 0) {
+        found = true;
+        while ((read = archive_read_data(a, compressedBuffer.data(),
+                                         lz4BufferSize)) > 0 &&
+               !emergency_end.load(memory_order_relaxed)) {
+          {
+            lock_guard<mutex> lock(mtx);
+            buffers.push(make_pair(read, compressedBuffer));
+          }
+          do_lz4.notify_one();
+        }
+
+        break;
+      }
+    }
+
+    unzip_finished.store(true, memory_order_relaxed);
+    archive_read_close(a);
+    archive_read_free(a);
+
+    if (!found) {
+      ui_print("Could not find %s on archive.", flash_data.first.c_str());
+    }
+  }
+
+  void unlz4() {
+    LZ4F_decompressionContext_t dctx;
+    LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
+    if (dctx == nullptr) {
+      ui_print("LZ4F_createDecompressionContext() failed!");
+      emergency_end.store(true, memory_order_relaxed);
+      return;
+    }
+
+    int fd =
+        open(flash_data.second.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0660);
+    if (fd == -1) {
+      ui_print("Failed to open %s!", flash_data.second.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      LZ4F_freeDecompressionContext(dctx);
+      return;
+    }
+
+    vector<unsigned char> decompressedBuffer(lz4BufferSize);
+
+    while (!emergency_end.load(memory_order_relaxed)) {
+      if (buffers.empty()) {
+        if (unzip_finished.load(memory_order_relaxed)) {
+          break;
+        } else {
+          unique_lock<mutex> lz4_lock(mtx_lz4);
+          do_lz4.wait(lz4_lock);
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
+            break;
+          }
+        }
+      }
+
+      unique_lock<mutex> lock(mtx);
+      auto front = buffers.front();
+      buffers.pop();
+      lock.unlock();
+
+      if (front.first == 0)
+        break;
+      if (front.first < 0) {
+        ui_print("LZ4: Error reading input.");
+        close(fd);
+        emergency_end.store(true, memory_order_relaxed);
+        goto end;
+      }
+
+      size_t inPos = 0;
+      size_t outPos = 0;
+
+      LZ4F_errorCode_t result;
+      size_t remaining = front.first;
+
+      while (remaining > 0) {
+        size_t dstSize = lz4BufferSize - outPos;
+        size_t srcSize = front.first - inPos;
+        result =
+            LZ4F_decompress(dctx, decompressedBuffer.data() + outPos, &dstSize,
+                            front.second.data() + inPos, &srcSize, nullptr);
+        if (LZ4F_isError(result)) {
+          ui_print("LZ4: %s", LZ4F_getErrorName(result));
+          close(fd);
+          emergency_end.store(true, memory_order_relaxed);
+          goto end;
+        }
+        inPos += srcSize;
+        outPos += dstSize;
+        remaining -= srcSize;
+        if (write(fd, decompressedBuffer.data(), outPos) !=
+            static_cast<ssize_t>(outPos)) {
+          ui_print("Error writing data!");
+          close(fd);
+          emergency_end.store(true, memory_order_relaxed);
+          goto end;
+        }
+        outPos = 0;
+      }
+    }
+
+  end:
+    unlz4_finished.store(true, memory_order_relaxed);
+    LZ4F_freeDecompressionContext(dctx);
     if (notify_flash) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
@@ -607,7 +770,9 @@ public:
         } else {
           unique_lock<mutex> write_lock(mtx_write);
           do_write.wait(write_lock);
-          if (emergency_end.load(memory_order_relaxed)) { // Maybe it was notified after a failure.
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
             break;
           }
         }
@@ -653,14 +818,25 @@ void flashZstdCompressedFile(pair<string, string> flash_data) {
   unzstd.join();
 }
 
+void flashLz4CompressedFile(pair<string, string> flash_data) {
+  Lz4HyperFlash flasher(flash_data);
+  thread unzipper(&Lz4HyperFlash::unzip, &flasher);
+  thread unlz4(&Lz4HyperFlash::unlz4, &flasher);
+  unzipper.join();
+  unlz4.join();
+}
+
 void flashCompressedFile(pair<string, string> flash_data) {
-  if (endsWith(flash_data.first, ".zst")) {
+  if (endsWith(flash_data.first, ".lz4")) {
+    flashLz4CompressedFile(flash_data);
+  } else if (endsWith(flash_data.first, ".zst")) {
     flashZstdCompressedFile(flash_data);
   } else if (endsWith(flash_data.first, ".xz") ||
              endsWith(flash_data.first, ".lzma")) {
     flashLzmaCompressedFile(flash_data);
   } else {
-    ui_print("Warning: %s has unsupported compression.", flash_data.first.c_str());
+    ui_print("Warning: %s has unsupported compression.",
+             flash_data.first.c_str());
   }
 }
 
@@ -793,7 +969,7 @@ bool check_prop_contains(const vector<string> &command) {
   return true;
 }
 
-void flash_compressed(const vector<string> &command, ThreadManager& manager) {
+void flash_compressed(const vector<string> &command, ThreadManager &manager) {
   check_arguments(3, command);
   pair<string, string> command_args(command[1], command[2]);
   umount_device(command_args.second);
@@ -804,7 +980,7 @@ void flash_compressed(const vector<string> &command, ThreadManager& manager) {
   }
 }
 
-void flash_raw(const vector<string> &command, ThreadManager& manager) {
+void flash_raw(const vector<string> &command, ThreadManager &manager) {
   check_arguments(3, command);
   pair<string, string> command_args(command[1], command[2]);
   umount_device(command_args.second);
@@ -833,19 +1009,18 @@ void print_msg(const vector<string> &command) {
 }
 
 bool parse_boolean(const string &value) {
-    return (value == "yes" || value == "YES" || value == "on" ||
-            value == "ON" || value == "1" || value == "true" ||
-            value == "TRUE");
+  return (value == "yes" || value == "YES" || value == "on" || value == "ON" ||
+          value == "1" || value == "true" || value == "TRUE");
 }
 
 void set_flash_notify(const vector<string> &command) {
-    check_arguments(2, command);
-    notify_flash = parse_boolean(command[1]);
+  check_arguments(2, command);
+  notify_flash = parse_boolean(command[1]);
 }
 
 void set_quick_flash(const vector<string> &command) {
-    check_arguments(2, command);
-    quick_flash = parse_boolean(command[1]);
+  check_arguments(2, command);
+  quick_flash = parse_boolean(command[1]);
 }
 
 int main(int argc, char *argv[]) {
