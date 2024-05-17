@@ -362,6 +362,7 @@ public:
     unlzma_finished.store(true, memory_order_relaxed);
     lzma_end(&strm);
     do_write.notify_one();
+    ram_continue.notify_one();
   }
 
   void writedisk() {
@@ -414,6 +415,7 @@ public:
     if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
+    ram_continue.notify_one();
   }
 };
 
@@ -562,6 +564,7 @@ public:
     if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
+    ram_continue.notify_one();
   }
 };
 
@@ -729,6 +732,7 @@ public:
     if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
+    ram_continue.notify_one();
   }
 };
 
@@ -852,6 +856,7 @@ public:
     if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
+    ram_continue.notify_one();
   }
 };
 
