@@ -61,4 +61,4 @@ cp ${liblzma}/src/liblzma/.libs/liblzma.a .
 cp ${liblz4}/lib/liblz4.a .
 cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${LIBZ}/libz.a .
 
-${CROSS}-clang++ *.cpp -o update-binary -O3 -std=c++17 -s -L. -larchive -lzstd -lz -llzma -llz4 -static-libstdc++ -I${libarchive}/libarchive -I${liblz4}/lib -I${libzstd}/lib -Wall -Wextra -llzma -I${liblzma}/src/liblzma/api
+${CROSS}-clang++ *.cpp -o update-binary -O3 -std=c++17 -static -s -L. -larchive -lzstd -lz -llzma -llz4 -static-libstdc++ -I${libarchive}/libarchive -I${liblz4}/lib -I${libzstd}/lib -Wall -Wextra -llzma -I${liblzma}/src/liblzma/api
