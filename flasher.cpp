@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#define MEMORY_LIMIT_PER_THREAD 128 * 1024 * 1024
+
 using namespace std;
 using mapped = vector<vector<string>>;
 static FILE *outfd;
@@ -177,7 +179,6 @@ void umount_device(string &device) {
 class LzmaHyperFlash {
 private:
   const int lzmaBufferSize = 256 * 1024;
-  const size_t memoryLimit = 128 * 1024 * 1024;
   atomic<size_t> usedRAM{0};
   queue<pair<size_t, vector<unsigned char>>> buffers_first;
   queue<pair<size_t, vector<unsigned char>>> buffers_second;
@@ -233,7 +234,7 @@ public:
 
           // Increment used ram and check if it exceeds limit.
           usedRAM += read;
-          if (usedRAM.load(memory_order_relaxed) >= memoryLimit) {
+          if (usedRAM.load(memory_order_relaxed) >= MEMORY_LIMIT_PER_THREAD) {
             unzip_running.store(false, memory_order_relaxed);
             unique_lock<mutex> ram(ram_lock);
             ram_continue.wait(ram);
@@ -401,7 +402,7 @@ public:
       }
 
       usedRAM -= front.first;
-      if (usedRAM.load(memory_order_relaxed) <= memoryLimit / 2 &&
+      if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
           !unzip_running.load(memory_order_relaxed)) {
         ram_continue.notify_one();
       }
@@ -410,7 +411,7 @@ public:
 
   end:
     write_finished.store(true, memory_order_relaxed);
-    if (notify_flash) {
+    if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
   }
@@ -418,13 +419,17 @@ public:
 
 class ZstdHyperFlash {
 private:
+  atomic<size_t> usedRAM{0};
   queue<pair<size_t, vector<unsigned char>>> buffers;
   mutex mtx;
   atomic<bool> unzip_finished{false};
   atomic<bool> unzstd_finished{false};
   atomic<bool> emergency_end{false};
+  atomic<bool> unzip_running{true};
   condition_variable do_zstd;
+  condition_variable ram_continue;
   mutex mtx_zstd;
+  mutex ram_lock;
   pair<string, string> flash_data;
 
 public:
@@ -459,6 +464,14 @@ public:
             buffers.push(make_pair(read, compressedBuffer));
           }
           do_zstd.notify_one();
+
+          usedRAM += read;
+          if (usedRAM.load(memory_order_relaxed) >= MEMORY_LIMIT_PER_THREAD) {
+            unzip_running.store(false, memory_order_relaxed);
+            unique_lock<mutex> ram(ram_lock);
+            ram_continue.wait(ram);
+            unzip_running.store(true, memory_order_relaxed);
+          }
         }
 
         break;
@@ -535,12 +548,18 @@ public:
           goto end;
         }
       }
+
+      usedRAM -= front.first;
+      if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
+          !unzip_running.load(memory_order_relaxed)) {
+        ram_continue.notify_one();
+      }
     }
 
   end:
     unzstd_finished.store(true, memory_order_relaxed);
     ZSTD_freeDCtx(dctx);
-    if (notify_flash) {
+    if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
   }
@@ -548,14 +567,18 @@ public:
 
 class Lz4HyperFlash {
 private:
+  atomic<size_t> usedRAM{0};
   const int lz4BufferSize = 256 * 1024;
   queue<pair<size_t, vector<unsigned char>>> buffers;
   mutex mtx;
   atomic<bool> unzip_finished{false};
   atomic<bool> unlz4_finished{false};
   atomic<bool> emergency_end{false};
+  atomic<bool> unzip_running{true};
   condition_variable do_lz4;
+  condition_variable ram_continue;
   mutex mtx_lz4;
+  mutex ram_lock;
   pair<string, string> flash_data;
 
 public:
@@ -590,6 +613,14 @@ public:
             buffers.push(make_pair(read, compressedBuffer));
           }
           do_lz4.notify_one();
+
+          usedRAM += read;
+          if (usedRAM.load(memory_order_relaxed) >= MEMORY_LIMIT_PER_THREAD) {
+            unzip_running.store(false, memory_order_relaxed);
+            unique_lock<mutex> ram(ram_lock);
+            ram_continue.wait(ram);
+            unzip_running.store(true, memory_order_relaxed);
+          }
         }
 
         break;
@@ -684,12 +715,18 @@ public:
         }
         outPos = 0;
       }
+
+      usedRAM -= front.first;
+      if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
+          !unzip_running.load(memory_order_relaxed)) {
+        ram_continue.notify_one();
+      }
     }
 
   end:
     unlz4_finished.store(true, memory_order_relaxed);
     LZ4F_freeDecompressionContext(dctx);
-    if (notify_flash) {
+    if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
   }
@@ -697,14 +734,18 @@ public:
 
 class RawHyperFlash {
 private:
+  atomic<size_t> usedRAM{0};
   size_t const bufferSize = 8 * 1024;
   queue<pair<size_t, vector<unsigned char>>> buffers;
   mutex mtx;
   atomic<bool> unzip_finished{false};
   atomic<bool> write_finished{false};
   atomic<bool> emergency_end{false};
+  atomic<bool> unzip_running{true};
   condition_variable do_write;
+  condition_variable ram_continue;
   mutex mtx_write;
+  mutex ram_lock;
   pair<string, string> flash_data;
 
 public:
@@ -739,6 +780,14 @@ public:
             buffers.push(make_pair(read, decompressedBuffer));
           }
           do_write.notify_one();
+
+          usedRAM += read;
+          if (usedRAM.load(memory_order_relaxed) >= MEMORY_LIMIT_PER_THREAD) {
+            unzip_running.store(false, memory_order_relaxed);
+            unique_lock<mutex> ram(ram_lock);
+            ram_continue.wait(ram);
+            unzip_running.store(true, memory_order_relaxed);
+          }
         }
 
         break;
@@ -789,12 +838,18 @@ public:
         emergency_end.store(true, memory_order_relaxed);
         goto end;
       }
+
+      usedRAM -= front.first;
+      if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
+          !unzip_running.load(memory_order_relaxed)) {
+        ram_continue.notify_one();
+      }
     }
     close(fd);
 
   end:
     write_finished.store(true, memory_order_relaxed);
-    if (notify_flash) {
+    if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
       ui_print("%s - OK", flash_data.first.c_str());
     }
   }
