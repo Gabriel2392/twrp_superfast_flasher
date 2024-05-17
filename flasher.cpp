@@ -178,7 +178,7 @@ void umount_device(string &device) {
 
 class LzmaHyperFlash {
 private:
-  const int lzmaBufferSize = 256 * 1024;
+  size_t const lzmaBufferSize = 128 * 1024;
   atomic<size_t> usedRAM{0};
   queue<pair<size_t, vector<unsigned char>>> buffers_first;
   queue<pair<size_t, vector<unsigned char>>> buffers_second;
@@ -568,7 +568,7 @@ public:
 class Lz4HyperFlash {
 private:
   atomic<size_t> usedRAM{0};
-  const int lz4BufferSize = 256 * 1024;
+  size_t const lz4BufferSize = 128 * 1024;
   queue<pair<size_t, vector<unsigned char>>> buffers;
   mutex mtx;
   atomic<bool> unzip_finished{false};
@@ -735,7 +735,7 @@ public:
 class RawHyperFlash {
 private:
   atomic<size_t> usedRAM{0};
-  size_t const bufferSize = 8 * 1024;
+  size_t const bufferSize = 128 * 1024;
   queue<pair<size_t, vector<unsigned char>>> buffers;
   mutex mtx;
   atomic<bool> unzip_finished{false};
