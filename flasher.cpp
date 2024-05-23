@@ -155,6 +155,15 @@ string GetProperty(const string &prop) {
   return result;
 }
 
+string getRealPath(const string& symbolicLinkPath) {
+    char resolvedPath[PATH_MAX];
+    if (realpath(symbolicLinkPath.c_str(), resolvedPath) != nullptr) {
+        return string(resolvedPath);
+    } else {
+        return "NULL";
+    }
+}
+
 void umount_device(string &device) {
   FILE *mountFile = setmntent("/proc/mounts", "r");
   if (mountFile == nullptr) {
@@ -163,8 +172,7 @@ void umount_device(string &device) {
 
   struct mntent *entry;
   while ((entry = getmntent(mountFile)) != nullptr) {
-    if (strcmp(entry->mnt_fsname, device.c_str()) == 0 ||
-        strcmp(entry->mnt_dir, device.c_str()) == 0) {
+    if (strcmp(entry->mnt_fsname, device.c_str()) == 0 || strcmp(entry->mnt_fsname, getRealPath(device).c_str())) {
       umount(entry->mnt_dir);
     }
   }
