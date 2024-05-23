@@ -101,21 +101,6 @@ void ui_print(const char *string, ...) {
   va_end(args);
 }
 
-bool endsWith(const string &str, const string &suffix) {
-  if (str.length() < suffix.length()) {
-    return false;
-  }
-  return str.compare(str.length() - suffix.length(), suffix.length(), suffix) ==
-         0;
-}
-
-bool startsWith(const string &str, const string &prefix) {
-  if (str.length() < prefix.length()) {
-    return false;
-  }
-  return str.compare(0, prefix.length(), prefix) == 0;
-}
-
 bool isDelimiter(char c, const string &delimiters) {
   return delimiters.find(c) != string::npos;
 }
@@ -887,12 +872,12 @@ void flashLz4CompressedFile(pair<string, string> flash_data) {
 }
 
 void flashCompressedFile(pair<string, string> flash_data) {
-  if (endsWith(flash_data.first, ".lz4")) {
+  if (flash_data.first.ends_with(".lz4"s)) {
     flashLz4CompressedFile(flash_data);
-  } else if (endsWith(flash_data.first, ".zst")) {
+  } else if (flash_data.first.ends_with(".zst"s)) {
     flashZstdCompressedFile(flash_data);
-  } else if (endsWith(flash_data.first, ".xz") ||
-             endsWith(flash_data.first, ".lzma")) {
+  } else if (flash_data.first.ends_with( ".xz"s) ||
+             flash_data.first.ends_with(".lzma"s)) {
     flashLzmaCompressedFile(flash_data);
   } else {
     ui_print("Warning: %s has unsupported compression.",
@@ -979,7 +964,7 @@ bool check_prop_startswith(const vector<string> &command) {
   string target_value = command[2];
   if (prop_value.empty()) {
     return false;
-  } else if (!startsWith(prop_value, target_value)) {
+  } else if (!prop_value.starts_with(target_value)) {
     ui_print("Check failed! %s does not start with %s.", prop_value.c_str(),
              target_value.c_str());
     return false;
@@ -993,7 +978,7 @@ bool check_prop_endswith(const vector<string> &command) {
   string target_value = command[2];
   if (prop_value.empty()) {
     return false;
-  } else if (!endsWith(prop_value, target_value)) {
+  } else if (!prop_value.ends_with(target_value)) {
     ui_print("Check failed! %s does not end with %s.", prop_value.c_str(),
              target_value.c_str());
     return false;
