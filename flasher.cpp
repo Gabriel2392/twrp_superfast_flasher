@@ -1060,14 +1060,18 @@ void flash_raw(const vector<string> &command, ThreadManager &manager) {
   }
 }
 
-void print_msg(const vector<string> &command) {
-  string result = command[1];
+string removeQuotes(const string& input) {
+  string result = input;
 
   if (result.front() == '\'' || result.front() == '"') {
     result = result.substr(1, result.size() - 2);
   }
 
-  ui_print(result.c_str());
+  return result;
+}
+
+void print_msg(const vector<string> &command) {
+  ui_print(removeQuotes(command[1]).c_str());
 }
 
 bool parse_boolean(const string &value) {
@@ -1139,9 +1143,9 @@ int main(int argc, char *argv[]) {
     } else if (command[0] == "ui_print") {
       print_msg(command);
     } else if (command[0] == "exec_bash") {
-      system(command[1].c_str());
+      system(removeQuotes(command[1]).c_str());
     } else if (command[0] == "exec_check_bash") {
-      int i = system(command[1].c_str());
+      int i = system(removeQuotes(command[1]).c_str());
       if (i != EXIT_SUCCESS) {
         return i;
       }
