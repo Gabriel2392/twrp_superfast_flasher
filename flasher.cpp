@@ -1145,7 +1145,7 @@ int main(int argc, char *argv[]) {
     } else if (command[0] == "exec_bash") {
       system(removeQuotes(command[1]).c_str());
     } else if (command[0] == "exec_check_bash") {
-      int i = system(removeQuotes(command[1]).c_str());
+      int i = system(removeQuotes(command[1]).c_str()) >> 8;
       if (i != EXIT_SUCCESS) {
         return i;
       }
