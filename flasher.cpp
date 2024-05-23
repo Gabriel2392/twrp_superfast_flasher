@@ -105,10 +105,11 @@ bool isDelimiter(char c, const string &delimiters) {
   return delimiters.find(c) != string::npos;
 }
 
-vector<string> splitByDelimiters(const string &str, const string &delimiters) {
+vector<string> splitByDelimiters(const string &str) {
   vector<string> segments;
   string segment;
   istringstream tokenStream(str);
+  const string delimiters = " =:";
 
   char c;
   while (tokenStream >> noskipws >> c) {
@@ -126,6 +127,16 @@ vector<string> splitByDelimiters(const string &str, const string &delimiters) {
   }
 
   return segments;
+}
+
+vector<string> processSimpleCommand(const string& input) {
+    vector<string> result;
+    string prefix = splitByDelimiters(input)[0];
+    
+    result.push_back(prefix);
+    result.push_back(input.substr(prefix.size() + 1));
+    
+    return result;
 }
 
 static void property_callback(const prop_info *pi, void *cookie) {
@@ -922,7 +933,12 @@ mapped mapFlashing() {
         if (line.empty() || line[0] == '#') {
           continue;
         }
-        vector<string> command = splitByDelimiters(line, " =:");
+        vector<string> command;
+        if (line.starts_with("ui_print") || line.starts_with("exec_bash") || line.starts_with("exec_check_bash")) {
+          command = processSimpleCommand(line);
+        } else {
+          command = splitByDelimiters(line);
+        }
         if (command.size() > 1) {
           allCommands.push_back(command);
         } else {
@@ -1037,14 +1053,7 @@ void flash_raw(const vector<string> &command, ThreadManager &manager) {
 }
 
 void print_msg(const vector<string> &command) {
-  string result;
-
-  for (size_t i = 1; i < command.size(); ++i) {
-    result += command[i];
-    if (i < command.size() - 1) {
-      result += " ";
-    }
-  }
+  string result = command[1];
 
   if (result.front() == '\'' || result.front() == '"') {
     result = result.substr(1, result.size() - 2);
@@ -1121,6 +1130,13 @@ int main(int argc, char *argv[]) {
       set_quick_flash(command);
     } else if (command[0] == "ui_print") {
       print_msg(command);
+    } else if (command[0] == "exec_bash") {
+      system(command[1].c_str());
+    } else if (command[0] == "exec_check_bash") {
+      int i = system(command[1].c_str());
+      if (i != EXIT_SUCCESS) {
+        return i;
+      }
     } else if (command[0] == "flash_compressed") {
       flash_compressed(command, manager);
     } else if (command[0] == "flash_raw") {
