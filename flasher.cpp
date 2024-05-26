@@ -1,5 +1,6 @@
 #include <archive.h>
 #include <archive_entry.h>
+#include <brotli/decode.h>
 #include <fcntl.h>
 #include <lz4frame.h>
 #include <lzma.h>
@@ -145,14 +146,14 @@ vector<string> splitByDelimiters(const string &str) {
   return segments;
 }
 
-vector<string> processSimpleCommand(const string& input) {
-    vector<string> result;
-    string prefix = splitByDelimiters(input)[0];
-    
-    result.push_back(prefix);
-    result.push_back(input.substr(prefix.size() + 1));
-    
-    return result;
+vector<string> processSimpleCommand(const string &input) {
+  vector<string> result;
+  string prefix = splitByDelimiters(input)[0];
+
+  result.push_back(prefix);
+  result.push_back(input.substr(prefix.size() + 1));
+
+  return result;
 }
 
 static void property_callback(const prop_info *pi, void *cookie) {
@@ -171,13 +172,13 @@ string GetProperty(const string &prop) {
   return result;
 }
 
-string getRealPath(const string& symbolicLinkPath) {
-    char resolvedPath[PATH_MAX];
-    if (realpath(symbolicLinkPath.c_str(), resolvedPath) != nullptr) {
-        return string(resolvedPath);
-    } else {
-        return "NULL";
-    }
+string getRealPath(const string &symbolicLinkPath) {
+  char resolvedPath[PATH_MAX];
+  if (realpath(symbolicLinkPath.c_str(), resolvedPath) != nullptr) {
+    return string(resolvedPath);
+  } else {
+    return "NULL";
+  }
 }
 
 void umount_device(string &device) {
@@ -188,13 +189,238 @@ void umount_device(string &device) {
 
   struct mntent *entry;
   while ((entry = getmntent(mountFile)) != nullptr) {
-    if (strcmp(entry->mnt_fsname, device.c_str()) == 0 || strcmp(entry->mnt_fsname, getRealPath(device).c_str())) {
+    if (strcmp(entry->mnt_fsname, device.c_str()) == 0 ||
+        strcmp(entry->mnt_fsname, getRealPath(device).c_str())) {
       umount(entry->mnt_dir);
     }
   }
 
   endmntent(mountFile);
 }
+
+class BrotliHyperFlash {
+private:
+  size_t const brotliBufferSize = 1024 * 1024;
+  atomic<size_t> usedRAM{0};
+  queue<pair<size_t, vector<unsigned char>>> buffers_first;
+  queue<pair<size_t, vector<unsigned char>>> buffers_second;
+  mutex mtx_first;
+  mutex mtx_second;
+  atomic<bool> unzip_finished{false};
+  atomic<bool> brotli_finished{false};
+  atomic<bool> write_finished{false};
+  atomic<bool> emergency_end{false};
+  atomic<bool> unzip_running{true};
+  condition_variable do_brotli;
+  condition_variable do_write;
+  condition_variable ram_continue;
+  mutex mtx_brotli;
+  mutex mtx_write;
+  mutex ram_lock;
+  pair<string, string> flash_data;
+
+public:
+  BrotliHyperFlash(pair<string, string> d) : flash_data(d) {}
+
+  void unzip() {
+    struct archive *a = archive_read_new();
+    archive_read_support_format_zip(a);
+
+    if (archive_read_open_filename(a, zip_filename.c_str(), 10240)) {
+      ui_print("Failed to open archive: %zu", archive_error_string(a));
+      emergency_end.store(true, memory_order_relaxed);
+      do_brotli.notify_one();
+      archive_read_free(a);
+      return;
+    }
+
+    vector<unsigned char> compressedBuffer(brotliBufferSize);
+
+    size_t read;
+    bool found = false;
+    struct archive_entry *entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+      const char *filename = archive_entry_pathname(entry);
+      if (strcmp(filename, flash_data.first.c_str()) == 0) {
+        found = true;
+        while ((read = archive_read_data(a, compressedBuffer.data(),
+                                         brotliBufferSize)) > 0 &&
+               !emergency_end.load(memory_order_relaxed)) {
+
+          // Guard push -> notify
+          {
+            lock_guard<mutex> lock(mtx_first);
+            buffers_first.push(make_pair(read, compressedBuffer));
+          }
+          do_brotli.notify_one();
+
+          // Increment used ram and check if it exceeds limit.
+          usedRAM += read;
+          if (usedRAM.load(memory_order_relaxed) >= MEMORY_LIMIT_PER_THREAD) {
+            unzip_running.store(false, memory_order_relaxed);
+            unique_lock<mutex> ram(ram_lock);
+            ram_continue.wait(ram);
+            unzip_running.store(true, memory_order_relaxed);
+          }
+        }
+
+        break;
+      }
+    }
+
+    unzip_finished.store(true, memory_order_relaxed);
+    archive_read_close(a);
+    archive_read_free(a);
+
+    if (!found) {
+      ui_print("Could not find %s on archive.", flash_data.first.c_str());
+    }
+  }
+
+  void brotlidec() {
+    vector<unsigned char> decompressedBuffer(brotliBufferSize);
+
+    // Brotli defaults
+    BrotliDecoderResult result = BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT;
+    size_t available_in = 0;
+    const uint8_t *next_in = nullptr;
+    size_t available_out = decompressedBuffer.size();
+    uint8_t *next_out;
+
+    BrotliDecoderState *decoder = BrotliDecoderCreateInstance(0, 0, 0);
+
+    if (!decoder) {
+      ui_print("Failed to initialize brotli decoder.");
+      emergency_end.store(true, memory_order_relaxed);
+      return;
+    }
+
+    BrotliDecoderSetParameter(decoder, BROTLI_DECODER_PARAM_LARGE_WINDOW, 1);
+
+    while (!emergency_end.load(memory_order_relaxed)) {
+      if (buffers_first.empty()) {
+        if (unzip_finished.load(memory_order_relaxed)) {
+          break;
+        } else {
+          unique_lock<mutex> brotli_lock(mtx_brotli);
+          do_brotli.wait(brotli_lock);
+          if (emergency_end.load(memory_order_relaxed)) {
+            break; // Prevent from being stuck
+          }
+        }
+      }
+
+      // Lock -> read -> delete [0] -> unlock
+      unique_lock<mutex> lock(mtx_first);
+      auto front = buffers_first.front();
+      buffers_first.pop();
+      lock.unlock();
+
+      available_in = front.first;
+      next_in = front.second.data();
+      available_out = decompressedBuffer.size();
+      next_out = decompressedBuffer.data();
+
+      while (true) {
+        result =
+            BrotliDecoderDecompressStream(decoder, &available_in, &next_in,
+                                          &available_out, &next_out, nullptr);
+        if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
+          size_t write_size = decompressedBuffer.size() - available_out;
+          {
+            lock_guard<mutex> lock(mtx_second);
+            buffers_second.push(make_pair(write_size, decompressedBuffer));
+          }
+          do_write.notify_one();
+
+          usedRAM += write_size;
+
+          available_out = decompressedBuffer.size();
+          next_out = decompressedBuffer.data();
+        } else if (result == BROTLI_DECODER_RESULT_ERROR) {
+          ui_print(
+              "Brotli decompression error: %s\n",
+              BrotliDecoderErrorString(BrotliDecoderGetErrorCode(decoder)));
+          emergency_end.store(true, memory_order_relaxed);
+          goto end;
+        } else {
+          break;
+        }
+      }
+
+      size_t produced = decompressedBuffer.size() - available_out;
+      if (produced > 0) {
+        {
+          lock_guard<mutex> lock(mtx_second);
+          buffers_second.push(make_pair(produced, decompressedBuffer));
+        }
+        do_write.notify_one();
+        usedRAM += produced;
+      }
+
+      usedRAM -= front.first;
+    }
+
+  end:
+    brotli_finished.store(true, memory_order_relaxed);
+    do_write.notify_one();
+    ram_continue.notify_one();
+  }
+
+  void writedisk() {
+    int fd =
+        open(flash_data.second.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0660);
+    if (fd == -1) {
+      ui_print("Failed to open %s!", flash_data.second.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      goto end;
+    }
+
+    while (!emergency_end.load(memory_order_relaxed)) {
+      if (buffers_second.empty()) {
+        if (brotli_finished.load(memory_order_relaxed)) {
+          break;
+        } else {
+          unique_lock<mutex> write_lock(mtx_write);
+          do_write.wait(write_lock);
+          if (emergency_end.load(
+                  memory_order_relaxed)) { // Maybe it was notified after a
+                                           // failure.
+            break;                         // Prevent from being stuck
+          }
+        }
+      }
+
+      unique_lock<mutex> lock(mtx_second);
+      auto front = buffers_second.front();
+      buffers_second.pop();
+      lock.unlock();
+
+      if (write(fd, front.second.data(), front.first) !=
+          static_cast<ssize_t>(front.first)) {
+        ui_print("Error writing data to %s!", flash_data.second.c_str());
+        close(fd);
+        emergency_end.store(true, memory_order_relaxed);
+        goto end;
+      }
+
+      add_progress(front.first);
+      usedRAM -= front.first;
+      if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
+          !unzip_running.load(memory_order_relaxed)) {
+        ram_continue.notify_one();
+      }
+    }
+    close(fd);
+
+  end:
+    write_finished.store(true, memory_order_relaxed);
+    if (notify_flash && !emergency_end.load(memory_order_relaxed)) {
+      ui_print("%s - OK", flash_data.first.c_str());
+    }
+    ram_continue.notify_one();
+  }
+};
 
 class LzmaHyperFlash {
 private:
@@ -897,6 +1123,16 @@ void flashLzmaCompressedFile(pair<string, string> flash_data) {
   writer.join();
 }
 
+void flashBrotliCompressedFile(pair<string, string> flash_data) {
+  BrotliHyperFlash flasher(flash_data);
+  thread unzipper(&BrotliHyperFlash::unzip, &flasher);
+  thread brotlidec(&BrotliHyperFlash::brotlidec, &flasher);
+  thread writer(&BrotliHyperFlash::writedisk, &flasher);
+  unzipper.join();
+  brotlidec.join();
+  writer.join();
+}
+
 void flashZstdCompressedFile(pair<string, string> flash_data) {
   ZstdHyperFlash flasher(flash_data);
   thread unzipper(&ZstdHyperFlash::unzip, &flasher);
@@ -916,9 +1152,11 @@ void flashLz4CompressedFile(pair<string, string> flash_data) {
 void flashCompressedFile(pair<string, string> flash_data) {
   if (flash_data.first.ends_with(".lz4"s)) {
     flashLz4CompressedFile(flash_data);
+  } else if (flash_data.first.ends_with(".br"s)) {
+    flashBrotliCompressedFile(flash_data);
   } else if (flash_data.first.ends_with(".zst"s)) {
     flashZstdCompressedFile(flash_data);
-  } else if (flash_data.first.ends_with( ".xz"s) ||
+  } else if (flash_data.first.ends_with(".xz"s) ||
              flash_data.first.ends_with(".lzma"s)) {
     flashLzmaCompressedFile(flash_data);
   } else {
@@ -965,7 +1203,8 @@ mapped mapFlashing() {
           continue;
         }
         vector<string> command;
-        if (line.starts_with("ui_print") || line.starts_with("exec_bash") || line.starts_with("exec_check_bash")) {
+        if (line.starts_with("ui_print") || line.starts_with("exec_bash") ||
+            line.starts_with("exec_check_bash")) {
           command = processSimpleCommand(line);
         } else {
           command = splitByDelimiters(line);
@@ -1083,7 +1322,7 @@ void flash_raw(const vector<string> &command, ThreadManager &manager) {
   }
 }
 
-string removeQuotes(const string& input) {
+string removeQuotes(const string &input) {
   string result = input;
 
   if (result.front() == '\'' || result.front() == '"') {
