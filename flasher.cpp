@@ -357,6 +357,7 @@ public:
               ui_print("LZMA: Unexpected stream end. Check %s integrity",
                        flash_data.first.c_str());
             }
+            usedRAM -= front.first;
             goto end;
           }
           switch (ret) {
@@ -372,6 +373,7 @@ public:
             break;
           }
           emergency_end.store(true, memory_order_relaxed);
+          usedRAM -= front.first;
           goto end;
         }
       }
