@@ -36,6 +36,7 @@ string result_value;
 string zip_filename;
 bool notify_flash = false;
 bool quick_flash = false;
+size_t totalBytes = 0;
 mutex print_mtx;
 
 class ThreadManager {
@@ -99,6 +100,21 @@ void ui_print(const char *string, ...) {
   }
 
   va_end(args);
+}
+
+void add_progress(size_t bytes) {
+  if (totalBytes <= 0) {
+    return;
+  }
+  float percentage = static_cast<float>(((double)bytes / (double)totalBytes));
+
+  {
+    lock_guard<mutex> lock(print_mtx);
+    fprintf(outfd, "progress %.64f 0\n", percentage);
+    fprintf(outfd, "set_progress 1.000000\n");
+
+    fflush(outfd);
+  }
 }
 
 bool isDelimiter(char c, const string &delimiters) {
@@ -406,6 +422,7 @@ public:
         goto end;
       }
 
+      add_progress(front.first);
       usedRAM -= front.first;
       if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
           !unzip_running.load(memory_order_relaxed)) {
@@ -553,6 +570,8 @@ public:
           emergency_end.store(true, memory_order_relaxed);
           goto end;
         }
+
+        add_progress(output.pos);
       }
 
       usedRAM -= front.first;
@@ -720,6 +739,7 @@ public:
           emergency_end.store(true, memory_order_relaxed);
           goto end;
         }
+        add_progress(outPos);
         outPos = 0;
       }
 
@@ -847,6 +867,7 @@ public:
         goto end;
       }
 
+      add_progress(front.first);
       usedRAM -= front.first;
       if (usedRAM.load(memory_order_relaxed) <= MEMORY_LIMIT_PER_THREAD / 2 &&
           !unzip_running.load(memory_order_relaxed)) {
@@ -1142,6 +1163,13 @@ int main(int argc, char *argv[]) {
       set_quick_flash(command);
     } else if (command[0] == "ui_print") {
       print_msg(command);
+    } else if (command[0] == "set_total_bytes") {
+      try {
+        totalBytes = static_cast<size_t>(std::stoull(command[1]));
+      } catch (...) {
+        totalBytes = 0;
+        ui_print("!- Out of range totalBytes");
+      }
     } else if (command[0] == "exec_bash") {
       system(removeQuotes(command[1]).c_str());
     } else if (command[0] == "exec_check_bash") {
