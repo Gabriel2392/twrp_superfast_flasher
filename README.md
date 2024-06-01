@@ -10,4 +10,6 @@ This tool is designed for working specifically with full partitions in the .img 
 
 3. **XZ (LZMA2)**: Best Compression Ratio. If you're looking to minimize the size of the zip, this is the recommended. However, it will take longer compared to LZ4 and ZSTD.
 
-4. **RAW**: If you want to store your files in an uncompressed format, you can also do so.
+4. **Brotli**: Offers an excellent balance between compression ratio and speed. While its compression ratio is slightly lower than XZ (LZMA2), its decompression speed can reach very high speeds.
+
+5. **RAW**: If you want to store your files in an uncompressed format, you can also do so.
