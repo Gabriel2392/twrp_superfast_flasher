@@ -200,7 +200,7 @@ void umount_device(string &device) {
 
 class BrotliHyperFlash {
 private:
-  size_t const brotliBufferSize = 1024 * 1024;
+  size_t const brotliBufferSize = 128 * 1024;
   atomic<size_t> usedRAM{0};
   queue<pair<size_t, vector<unsigned char>>> buffers_first;
   queue<pair<size_t, vector<unsigned char>>> buffers_second;
