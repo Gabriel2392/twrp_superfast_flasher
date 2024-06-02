@@ -369,7 +369,7 @@ public:
     ram_continue.notify_one();
   }
 
-  void writedisk() {
+  void writer() {
     int fd =
         open(flash_data.second.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0660);
     if (fd == -1) {
@@ -617,7 +617,7 @@ public:
     ram_continue.notify_one();
   }
 
-  void writedisk() {
+  void writer() {
     int fd =
         open(flash_data.second.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0660);
     if (fd == -1) {
@@ -1125,7 +1125,7 @@ void flashLzmaCompressedFile(pair<string, string> flash_data) {
   LzmaHyperFlash flasher(flash_data);
   thread unzipper(&LzmaHyperFlash::unzip, &flasher);
   thread unlzma(&LzmaHyperFlash::unlzma, &flasher);
-  thread writer(&LzmaHyperFlash::writedisk, &flasher);
+  thread writer(&LzmaHyperFlash::writer, &flasher);
   unzipper.join();
   unlzma.join();
   writer.join();
@@ -1135,7 +1135,7 @@ void flashBrotliCompressedFile(pair<string, string> flash_data) {
   BrotliHyperFlash flasher(flash_data);
   thread unzipper(&BrotliHyperFlash::unzip, &flasher);
   thread brotlidec(&BrotliHyperFlash::brotlidec, &flasher);
-  thread writer(&BrotliHyperFlash::writedisk, &flasher);
+  thread writer(&BrotliHyperFlash::writer, &flasher);
   unzipper.join();
   brotlidec.join();
   writer.join();
