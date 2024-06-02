@@ -82,3 +82,6 @@ tar -xf upx-4.2.4-amd64_linux.tar.xz
 UPX="$(pwd)/upx-4.2.4-amd64_linux/upx"
 
 "$UPX" --best --ultra-brute -o META-INF/com/google/android/update-binary update-binary
+
+mkdir -p Flasher
+mv META-INF Flasher
