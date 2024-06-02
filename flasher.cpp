@@ -274,6 +274,8 @@ public:
 
     if (!found) {
       ui_print("Could not find %s on archive.", flash_data.first.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      do_brotli.notify_one();
     }
   }
 
@@ -498,6 +500,8 @@ public:
 
     if (!found) {
       ui_print("Could not find %s on archive.", flash_data.first.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      do_lzma.notify_one();
     }
   }
 
@@ -735,6 +739,8 @@ public:
 
     if (!found) {
       ui_print("Could not find %s on archive.", flash_data.first.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      do_zstd.notify_one();
     }
   }
 
@@ -887,6 +893,8 @@ public:
 
     if (!found) {
       ui_print("Could not find %s on archive.", flash_data.first.c_str());
+      emergency_end.store(true, memory_order_relaxed);
+      do_lz4.notify_one();
     }
   }
 
