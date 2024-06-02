@@ -35,7 +35,7 @@ DIR="$(pwd)"
 cd "libarchive-${latest_libarchive//v/}"
 libarchive="$(pwd)"
 ./configure --without-xml2 --without-expat --without-openssl --without-cng --without-lzma --without-zstd --without-lz4 --without-iconv --without-bz2lib --without-libb2 --disable-bsdcpio --disable-bsdcat --disable-bsdtar --disable-bsdunzip --enable-shared=no --host=${CROSS} CC=${CROSS}-clang CXX=${CROSS}-clang++ CFLAGS=-I./contrib/android/include 
-make -j2
+make -j4
 cd "$DIR"
 
 # brotli
@@ -44,19 +44,19 @@ libbrotli="$(pwd)"
 mkdir build
 cd build
 cmake .. -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_COMPILER=${CROSS}-clang -DCMAKE_CXX_COMPILER=${CROSS}-clang++
-make -j2
+make -j4
 cd "$DIR"
 
 # zstd
 cd "zstd-${latest_libzstd//v/}"
 libzstd="$(pwd)"
-make CC=${CROSS}-clang CXX=${CROSS}-clang++ -j2
+make CC=${CROSS}-clang CXX=${CROSS}-clang++ -j4
 cd "$DIR"
 
 # lz4
 cd "lz4-${latest_liblz4//v/}"
 liblz4="$(pwd)"
-make CC=${CROSS}-clang CXX=${CROSS}-clang++ -j2
+make CC=${CROSS}-clang CXX=${CROSS}-clang++ -j4
 cd "$DIR"
 
 # lzma
@@ -64,7 +64,7 @@ cd "xz-${latest_liblzma//v/}"
 liblzma="$(pwd)"
 ./autogen.sh || true
 ./configure --enable-shared=no CC=${CROSS}-clang CXX=${CROSS}-clang++ --disable-doc --host=${CROSS}
-make -j2
+make -j4
 cd "$DIR"
 
 cp ${libarchive}/.libs/libarchive.a .
