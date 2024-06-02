@@ -1,4 +1,4 @@
-### SFF ###
+### SFF v4.0.0 ###
 # Supported commands:
 # flash_compressed - flashes lz4 (.lz4), zstandard (.zst), lzma2 (.xz) or brotli (.br) (Not the same as .new.dat.br!!!) compressed files
 # flash_raw - flashes raw files
