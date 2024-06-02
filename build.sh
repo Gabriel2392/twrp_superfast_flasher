@@ -76,3 +76,9 @@ cp ${libbrotli}/build/libbrotlicommon.a .
 cp $NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${LIBZ}/libz.a .
 
 ${CROSS}-clang++ *.cpp -o update-binary -O3 -std=c++20 -static -s -L. -lbrotlicommon -lbrotlidec -larchive -lzstd -lz -llzma -llz4 -static-libstdc++ -I${libbrotli}/c/include -I${libarchive}/libarchive -I${liblz4}/lib -I${libzstd}/lib -Wall -Wextra -llzma -I${liblzma}/src/liblzma/api
+
+wget https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-amd64_linux.tar.xz
+tar -xf upx-4.2.4-amd64_linux.tar.xz
+UPX="$(pwd)/upx-4.2.4-amd64_linux/upx"
+
+"$UPX" --best --ultra-brute -o META-INF/com/google/android/update-binary update-binary
