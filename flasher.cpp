@@ -413,6 +413,7 @@ public:
         ram_continue.notify_one();
       }
     }
+    fsync(fd);
     close(fd);
 
   end:
@@ -661,6 +662,7 @@ public:
         ram_continue.notify_one();
       }
     }
+    fsync(fd);
     close(fd);
 
   end:
@@ -814,6 +816,9 @@ public:
         ram_continue.notify_one();
       }
     }
+    
+    fsync(fd);
+    close(fd);
 
   end:
     unzstd_finished.store(true, memory_order_relaxed);
@@ -985,6 +990,9 @@ public:
         ram_continue.notify_one();
       }
     }
+    
+    fsync(fd);
+    close(fd);
 
   end:
     unlz4_finished.store(true, memory_order_relaxed);
@@ -1110,6 +1118,7 @@ public:
         ram_continue.notify_one();
       }
     }
+    fsync(fd);
     close(fd);
 
   end:
